@@ -13,8 +13,17 @@
  * session.
  *
  * Tools injected:
- *   Always (read-only): skill_search, skill_view, skill_files_read,
+ *   Always (read-only): skill_search, skill_get, skill_view, skill_files_read,
  *                       skill_extract
+ *
+ * skill_get vs skill_view: both open a skill's SKILL.md + manifest. skill_get
+ * reads by skill_id (works cross-agent for anything visible to the caller —
+ * own or team-shared); skill_view reads by name but is owner-scoped (the core
+ * gateway's get-by-name only resolves within the caller's own agent). Before
+ * this file added skill_get, skill_view was the *only* "open" tool exposed,
+ * so a cross-agent skill_search hit (by design, team-visible) had no way to
+ * be opened — the model would get 40401 SKILL_NOT_FOUND and give up. See
+ * docs/design/2026-06-17-team-skill-proxy-runtime.md §4.
  *   Only when allowLlmWrite=true: skill_create, skill_update, skill_patch,
  *                                skill_delete, skill_files_write, skill_files_remove
  *
@@ -75,7 +84,7 @@ export function renderSkillToolsBlock(
     `  <tool name="skill_search">`,
     `    path: ${bridge}/search`,
     `    body: {"query": "描述你要找什么 skill 的关键词（必填，>=1字符）"}`,
-    `    use:  在**你在团队中有权限访问**的 skill 中按关键词 + 语义检索匹配项（跨 agent，但**不含**其他人设置为私密的 skill —— 与前端「团队资产」tab 展示一致）。query 必须是非空字符串，建议写 2-5 个相关关键词。当你觉得自己自带的 skill 不够用时，用它发现团队里其他可用的 skill。返回条数由服务端固定，若结果不理想请换一组关键词重试，不要在 body 里加 top_k/mode 等其它字段（会被忽略）。`,
+    `    use:  在**你在团队中有权限访问**的 skill 中按关键词 + 语义检索匹配项（跨 agent，但**不含**其他人设置为私密的 skill —— 与前端「团队资产」tab 展示一致）。query 必须是非空字符串，建议写 2-5 个相关关键词。当你觉得自己自带的 skill 不够用时，用它发现团队里其他可用的 skill。返回条数由服务端固定，若结果不理想请换一组关键词重试，不要在 body 里加 top_k/mode 等其它字段（会被忽略）。结果里每条都带 skill_id —— 读详情时用 skill_get，不要用 skill_view（后者只能读自己名下的，读别人共享给团队的 skill 会 404）。`,
     `  </tool>`,
     "",
     // 暂时下线：<available_skills> 块已经注入 agent 自带的 skill 列表，功能重叠。
@@ -86,16 +95,22 @@ export function renderSkillToolsBlock(
     // `    use:  列出 head + active skill；按 owner / 前缀过滤`,
     // `  </tool>`,
     // "",
+    `  <tool name="skill_get">`,
+    `    path: ${bridge}/get`,
+    `    body: {"skill_id": "skl-xxx", "include_content": true, "include_manifest": true}`,
+    `    use:  **打开一个 skill 的入口（优先用这个）**：按 skill_id 拿 SKILL.md 全文 + 资源目录树（manifest）。跨 agent 可用 —— 只要该 skill 对你可见（自己名下，或别人共享给团队的），无论是不是你名下都能读到。skill_id 从 skill_search 的结果里拿，或 <available_skills> 里 \`- name: description\` 条目对应的 id。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。`,
+    `  </tool>`,
+    "",
     `  <tool name="skill_view">`,
     `    path: ${bridge}/get-by-name`,
     `    body: {"skill_name": "<skill 名字>", "include_content": true, "include_manifest": true}`,
-    `    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_name 用 <available_skills> 里 \`- name: description\` 那个 name，或 skill_search 结果里的 name 字段。`,
+    `    use:  跟 skill_get 一样是打开入口，但**只能读你自己名下的 skill**（按名字找，找不到自己名下同名的会 404）。只有当你手上只有名字、没有 skill_id 时才用它；否则优先用 skill_get。`,
     `  </tool>`,
     "",
     `  <tool name="skill_files_read">`,
     `    path: ${bridge}/files/read`,
     `    body: {"skill_id": "skl-xxx", "path": "scripts/run.sh", "encoding": "utf-8|base64"}`,
-    `    use:  读取单个资源文件内容。**必须先调 skill_view 拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。`,
+    `    use:  读取单个资源文件内容。**必须先调 skill_get（或 skill_view）拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。`,
     `  </tool>`,
     "",
     `  <tool name="skill_extract">`,
@@ -150,7 +165,7 @@ export function renderSkillToolsBlock(
   const readErrors = [
     "- 40001 参数校验失败：body 字段缺失/格式错，看 message 里具体字段名。",
     "- 40101 session not initialized：session 未识别（很可能你在错误的 conversation 环境用了这个工具）。",
-    "- 40401 SKILL_NOT_FOUND：skill 不存在或不属于你所在的 agent；先用 skill_search 找同类 skill。",
+    "- 40401 SKILL_NOT_FOUND：如果是调 skill_view 报的，很可能这个 skill 不是你名下的——换成 skill_get 按 skill_id 读；如果是 skill_get 也 404，才是真的不存在，回 skill_search 换关键词找同类 skill。",
     "- 50301 upstream unavailable：core 侧临时不可达，稍后重试。",
   ];
   const writeErrors = [
