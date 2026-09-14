@@ -351,7 +351,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     // <proxy>/memory-bridge/v3/* 调用只读工具。proxy 自动注入身份。
     // proxyBaseUrl 复用 skill-tools-injector 算出来的（同一 host:port）。
     if (typeof proxyBaseUrl !== "undefined") {
-      registry.register(new TdaiToolsInjector({ proxyBaseUrl, allowMemoryWrite: config.tdai.allowMemoryWrite }));
+      registry.register(new TdaiToolsInjector({ proxyBaseUrl }));
     }
   }
 

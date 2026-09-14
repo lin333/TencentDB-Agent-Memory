@@ -135,7 +135,6 @@ export async function triggerSkillExtractIfReady(input: TriggerInput): Promise<v
           agent_id: agentId,
           task_id: sessionInfo.task_id as string | undefined,
           messages: turnMessages,
-          reason: config.coreSkill?.extractReason || undefined,
         },
         // core Shark 走 x-tdai-service-id = 真实内核实例 ID
         { serviceId: spaceId },

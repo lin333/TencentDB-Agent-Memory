@@ -50,11 +50,6 @@ export interface TdaiMemoryToolsInjectorConfig {
    * E.g. `http://127.0.0.1:8096`. Trailing slash trimmed.
    */
   proxyBaseUrl: string;
-  /**
-   * 是否注入 tdai_memory_write 主动写工具。默认 false。
-   * 对应 config.tdai.allowMemoryWrite。
-   */
-  allowMemoryWrite?: boolean;
 }
 
 /** 渲染整段 `<tdai_memory_tools>` 文本，纯函数便于测试。 */
@@ -62,7 +57,6 @@ export function renderTdaiMemoryToolsBlock(
   proxyBaseUrl: string,
   sessionId?: string,
   spaceId?: string,
-  allowMemoryWrite?: boolean,
 ): string {
   const base = proxyBaseUrl.replace(/\/$/, "");
   const bridge = `${base}/memory-bridge/v3`;
@@ -141,16 +135,6 @@ export function renderTdaiMemoryToolsBlock(
     `  -H 'Content-Type: application/json'${authHeader} \\`,
     `  -d '{"query": "用户偏好的编程语言", "limit": 5}'`,
     "```",
-    ...(allowMemoryWrite ? [
-      "",
-      "  <tool name=\"tdai_memory_write\">",
-      `    curl: ${bridge}/atomic/write`,
-      `    body: {"content": "<text>", "type": "instruction", "visibility": "team"}`,
-      "    use:  **主动写入团队共享记忆（L1 atom）**。用于把本轮推导出的结论、规则、知识点固化为团队可见的 L1 原子记忆。" +
-      "type 可选 `episodic`（事件）/`persona`（用户画像）/`instruction`（规则/结论，默认）。" +
-      "visibility=team 让所有团队成员可检索。**仅在有明确、高质量的可复用结论时写入**，不要写中间步骤或临时推断。",
-      "  </tool>",
-    ] : []),
     "</tdai_memory_tools>",
   ];
 
@@ -189,11 +173,11 @@ export class TdaiMemoryToolsInjector implements InjectionHook {
   private renderBlocks(sessionId: string, spaceId?: string): ContextBlock[] {
     return [{
       type: "text",
-      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId, this.cfg.allowMemoryWrite),
+      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId),
       metadata: {
         source: this.id,
         sessionId,
-        cacheKey: `tdai-memory-tools-injector:tools:${this.cfg.allowMemoryWrite ? "rw" : "ro"}`,
+        cacheKey: "tdai-memory-tools-injector:tools",
       },
     }];
   }
