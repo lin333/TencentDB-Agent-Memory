@@ -132,14 +132,24 @@ export class AnthropicAdapter implements ProtocolAdapter {
       case "tool_result": {
         const resultContent = block.content;
         let contentStr: string;
+        let rawBlocks: Record<string, unknown>[] | undefined;
         if (typeof resultContent === "string") {
           contentStr = resultContent;
         } else if (Array.isArray(resultContent)) {
-          // tool_result can have nested content blocks
-          contentStr = (resultContent as Record<string, unknown>[])
+          const arr = resultContent as Record<string, unknown>[];
+          // tool_result can have nested content blocks (text AND non-text,
+          // e.g. image blocks from Read/MCP tools that return screenshots).
+          // contentStr below is a text-only projection used elsewhere for
+          // logging/summarization; it must NOT be treated as the full
+          // fidelity payload — non-text blocks (images) would silently
+          // vanish if serialize() only had this string to work with.
+          // rawBlocks preserves the original array losslessly so
+          // serializeContentBlockInner can round-trip it byte-for-byte.
+          contentStr = arr
             .filter((c) => c.type === "text")
             .map((c) => c.text as string)
             .join("\n");
+          rawBlocks = arr;
         } else {
           contentStr = JSON.stringify(resultContent ?? "");
         }
@@ -149,6 +159,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
           metadata: {
             tool_use_id: block.tool_use_id as string,
             is_error: block.is_error as boolean | undefined,
+            ...(rawBlocks !== undefined ? { raw_content_blocks: rawBlocks } : {}),
           },
         };
       }
@@ -237,10 +248,14 @@ export class AnthropicAdapter implements ProtocolAdapter {
       }
 
       case "tool_result": {
+        // Prefer the lossless original blocks (preserved by parse() above)
+        // over the text-only projection — the projection drops non-text
+        // blocks like images, which would otherwise never reach the model.
+        const content = block.metadata?.raw_content_blocks ?? block.content;
         const result: Record<string, unknown> = {
           type: "tool_result",
           tool_use_id: block.metadata?.tool_use_id ?? "",
-          content: block.content,
+          content,
         };
         if (block.metadata?.is_error) {
           result.is_error = true;
