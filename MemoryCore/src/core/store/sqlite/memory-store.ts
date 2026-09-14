@@ -869,6 +869,50 @@ export class VectorStore implements IMemoryStore {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_record    ON memory_audit(record_id, updated_at_ms)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_isolation ON memory_audit(team_id, agent_id, user_id, task_id)");
 
+    // Online migration: pre-atomic/write DBs have a CHECK(action IN ('update','delete'))
+    // that rejects the new "create" action (POST /v3/atomic/write). SQLite can't ALTER
+    // a CHECK constraint, so detect the stale constraint via sqlite_master and rebuild
+    // the table (audit is a log, not primary data — safe to recreate in one transaction).
+    try {
+      const existingSql = this.db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_audit'")
+        .get() as { sql?: string } | undefined;
+      if (existingSql?.sql && !existingSql.sql.includes("'create'")) {
+        this.db.exec("BEGIN");
+        this.db.exec("ALTER TABLE memory_audit RENAME TO memory_audit_old_pre_create_action");
+        this.db.exec(`
+          CREATE TABLE memory_audit (
+            audit_id      TEXT PRIMARY KEY,
+            record_id     TEXT NOT NULL,
+            layer         TEXT NOT NULL CHECK (layer IN ('L1','L2','L3')),
+            action        TEXT NOT NULL CHECK (action IN ('create','update','delete')),
+            team_id       TEXT,
+            agent_id      TEXT,
+            user_id       TEXT,
+            task_id       TEXT,
+            version       INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            request_id    TEXT
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO memory_audit
+          SELECT audit_id, record_id, layer, action, team_id, agent_id, user_id, task_id, version, updated_at_ms, request_id
+          FROM memory_audit_old_pre_create_action
+        `);
+        this.db.exec("DROP TABLE memory_audit_old_pre_create_action");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_record    ON memory_audit(record_id, updated_at_ms)");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_isolation ON memory_audit(team_id, agent_id, user_id, task_id)");
+        this.db.exec("COMMIT");
+        this.logger?.info("[sqlite] memory_audit migrated: action CHECK now allows 'create'");
+      }
+    } catch (err) {
+      try { this.db.exec("ROLLBACK"); } catch { /* no transaction open */ }
+      this.logger?.warn(
+        `[sqlite] memory_audit 'create' action migration failed (non-fatal, audit logging degrades): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // ── Custom Memory Prompt ──
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_prompts (
