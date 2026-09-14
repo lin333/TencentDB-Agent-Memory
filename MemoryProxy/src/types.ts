@@ -301,6 +301,12 @@ export interface TdaiConfig {
   endpoint: string;
   apiKey: string;
   serviceId: string;
+  /**
+   * 是否允许 LLM 主动写入团队记忆（L1 atom）。默认 false。
+   * true 时 <tdai_memory_tools> 注入额外的 tdai_memory_write 工具。
+   * 只有对受信任的 agent 开启（错误写入会污染共享记忆）。
+   */
+  allowMemoryWrite?: boolean;
   memory: {
     enabled: boolean;
     /** Master switch for all TDAI memory prompt injection. */
@@ -334,6 +340,13 @@ export interface CoreSkillConfig {
   serviceId: string;
   /** Per-call timeout (ms). Default 1500 — RAG is on the session_init hot path. */
   timeoutMs: number;
+  /**
+   * 传给 /v3/skill/conversation/add 的 reason 字段（≤500 字符）。
+   * Core 在决定触发归档时会把此字段拼到提炼 LLM prompt 最前面。
+   * 用于强制提炼输出语言（如中文）或定制提炼风格。
+   * 默认空（core 使用内置提炼指令）。
+   */
+  extractReason?: string;
 }
 
 /**

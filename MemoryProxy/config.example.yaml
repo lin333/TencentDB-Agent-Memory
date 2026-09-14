@@ -603,6 +603,9 @@ tdai:
   endpoint: "http://127.0.0.1:8420"   # 内核 gateway 地址（通常与 skill.endpoint 相同）
   apiKey: "local"           # Authorization: Bearer 值（通常与 skill.serviceToken 相同）
   serviceId: "default"      # x-tdai-service-id header 值
+  # allowMemoryWrite: false  # 可选（默认 false）。true 时注入 tdai_memory_write 工具，
+  #                           允许 agent 主动写入团队共享记忆（L1 atom）。
+  #                           仅对受信任的 agent 开启，错误写入会污染共享记忆。
   memory:
     enabled: true           # Memory 子模块总开关
     inject: true            # 上下文注入总开关（false = 所有 L0~L3 注入全关）
@@ -632,6 +635,11 @@ skill:
   serviceId: "context-proxy"          # 租户/服务标识 → x-tdai-service-id
                                        #   请求路径带 /proxy/<spaceId>/ 时会被 spaceId 覆盖
   timeoutMs: 1500                     # 单次调用超时（毫秒）。RAG 在 session_init 热路径上，不宜太大
+  # extractReason: |                  # 可选（默认空）。传给 /v3/skill/conversation/add 的 reason 字段（≤500 字符）。
+  #   Core 在决定触发归档时会把此字段拼到提炼 LLM prompt 最前面，用于定制提炼语言/风格。
+  #   中文接入方建议设置为：
+  #   请使用中文提炼 skill。name 保持英文 slug；description 必须用中文写清楚触发场景
+  #   （以"中文触发场景："开头）；body 内容用中文。
 
 
 # ── Knowledge tools 注入（独立 gateway 配置） ───────────────────────────────

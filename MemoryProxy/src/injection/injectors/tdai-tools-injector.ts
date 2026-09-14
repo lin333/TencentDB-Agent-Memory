@@ -50,6 +50,11 @@ export interface TdaiMemoryToolsInjectorConfig {
    * E.g. `http://127.0.0.1:8096`. Trailing slash trimmed.
    */
   proxyBaseUrl: string;
+  /**
+   * 是否注入 tdai_memory_write 主动写工具。默认 false。
+   * 对应 config.tdai.allowMemoryWrite。
+   */
+  allowMemoryWrite?: boolean;
 }
 
 /** 渲染整段 `<tdai_memory_tools>` 文本，纯函数便于测试。 */
@@ -57,6 +62,7 @@ export function renderTdaiMemoryToolsBlock(
   proxyBaseUrl: string,
   sessionId?: string,
   spaceId?: string,
+  allowMemoryWrite?: boolean,
 ): string {
   const base = proxyBaseUrl.replace(/\/$/, "");
   const bridge = `${base}/memory-bridge/v3`;
@@ -82,8 +88,9 @@ export function renderTdaiMemoryToolsBlock(
     "",
     "  <tool name=\"tdai_memory_search\">",
     `    curl: ${bridge}/atomic/search`,
-    `    body: {"query": "<text>", "limit": 5}`,
-    "    use:  搜索 L1 原子记忆（双路 hybrid: dense vector + BM25），按相关度排序。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。适合回忆用户偏好、历史结论、规则等。",
+    `    body: {"query": "<text>", "limit": 5, "agent_id": "?<id>"}`,
+    "    use:  搜索 L1 原子记忆（双路 hybrid: dense vector + BM25），按相关度排序。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。适合回忆用户偏好、历史结论、规则等。" +
+    "如需搜索特定知识域（如 iOS-Retail、broker-platform），传 `agent_id`（取自 `<l2_scene_index>` 或 `<tdai_profile_memory>` 里 `imported_from` 分段注明的 agent_id），proxy 会路由到对应的 domain agent。",
     "    returns: {code, data: {items: [...], searched_agents: [...]}} — 命中项在 data.items[]。",
     "  </tool>",
     "",
@@ -95,8 +102,8 @@ export function renderTdaiMemoryToolsBlock(
     "",
     "  <tool name=\"tdai_conversation_search\">",
     `    curl: ${bridge}/conversation/search`,
-    `    body: {"query": "<text>", "limit": 5, "session_id": "?<sid>"}`,
-    "    use:  在 L0 原始对话中检索（比 atomic_search 粒度更细，找具体消息原文 / 引用 / 时间线）。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。",
+    `    body: {"query": "<text>", "limit": 5, "session_id": "?<sid>", "agent_id": "?<id>"}`,
+    "    use:  在 L0 原始对话中检索（比 atomic_search 粒度更细，找具体消息原文 / 引用 / 时间线）。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。可传 `agent_id` 路由到特定 domain agent（用法同 tdai_memory_search）。",
     "    returns: {code, data: {messages: [...], searched_agents: [...]}} — 命中项在 data.messages[]（注意：与 atomic_search 的 data.items 不同）。",
     "  </tool>",
     "",
@@ -134,6 +141,16 @@ export function renderTdaiMemoryToolsBlock(
     `  -H 'Content-Type: application/json'${authHeader} \\`,
     `  -d '{"query": "用户偏好的编程语言", "limit": 5}'`,
     "```",
+    ...(allowMemoryWrite ? [
+      "",
+      "  <tool name=\"tdai_memory_write\">",
+      `    curl: ${bridge}/atomic/write`,
+      `    body: {"content": "<text>", "type": "instruction", "visibility": "team"}`,
+      "    use:  **主动写入团队共享记忆（L1 atom）**。用于把本轮推导出的结论、规则、知识点固化为团队可见的 L1 原子记忆。" +
+      "type 可选 `episodic`（事件）/`persona`（用户画像）/`instruction`（规则/结论，默认）。" +
+      "visibility=team 让所有团队成员可检索。**仅在有明确、高质量的可复用结论时写入**，不要写中间步骤或临时推断。",
+      "  </tool>",
+    ] : []),
     "</tdai_memory_tools>",
   ];
 
@@ -172,11 +189,11 @@ export class TdaiMemoryToolsInjector implements InjectionHook {
   private renderBlocks(sessionId: string, spaceId?: string): ContextBlock[] {
     return [{
       type: "text",
-      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId),
+      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId, this.cfg.allowMemoryWrite),
       metadata: {
         source: this.id,
         sessionId,
-        cacheKey: "tdai-memory-tools-injector:tools",
+        cacheKey: `tdai-memory-tools-injector:tools:${this.cfg.allowMemoryWrite ? "rw" : "ro"}`,
       },
     }];
   }
