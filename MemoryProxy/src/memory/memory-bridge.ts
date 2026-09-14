@@ -17,8 +17,9 @@
  * 安全：
  *   - allowlist 限定只有 search / read 类只读 subpath + 一个受控写例外 atomic/write；
  *     其余 mutation（atomic/update / scenario/write / core/write 等）一律走主链路
- *   - atomic/write 仅在 config.tdai.allowMemoryWrite 为 true 时才会被 LLM 看到
- *     （TdaiToolsInjector 不渲染该工具块），且受 Core 侧 team/user 隔离 + 审计兜底
+ *   - atomic/write 双重门禁：allowMemoryWrite=false 时 TdaiToolsInjector 不渲染
+ *     该工具块（LLM 不知道该调用它），bridge 本身也会直接拒绝该 subpath（防止绕过
+ *     prompt 直接 curl），且写入侧已有 Core 端 team/user 隔离 + 审计兜底
  *   - v3 strict isolation: 强制注入 session_id，满足 L0/L1 必填要求
  */
 
@@ -51,7 +52,7 @@ const TAG = "[memory-bridge]";
 const ALLOWED_SUBPATHS = new Set<string>([
   "atomic/search",        // L1 原子记忆 hybrid search
   "atomic/query",         // L1 按 type/时间/分页
-  "atomic/write",         // L1 主动写入团队/私有记忆（受 allowMemoryWrite 开关控制是否暴露给 LLM）
+  "atomic/write",         // L1 主动写入团队/私有记忆；实际放行还受 allowMemoryWrite 开关二次门禁（见下方 handler）
   "conversation/search",  // L0 对话 hybrid search
   "conversation/query",   // L0 按 session 取历史
   "scenario/ls",          // L2 场景列表（path 索引）
@@ -279,6 +280,16 @@ export function createMemoryBridgeHandler(
         executedEndpoint: sub,
       });
       return envelope(40301, `${TAG} subpath '${sub}' not allowed via bridge`, 403);
+    }
+    // atomic/write 只在 allowlist 里表示"可转发的写路径"；是否真的放行还要看
+    // 部署配置开关，防止 allowMemoryWrite=false 时仍能被直接 curl 绕过 prompt 门禁。
+    if (sub === "atomic/write" && !config.tdai?.allowMemoryWrite) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "memory-bridge",
+        rejectReason: "memory_write_disabled", httpStatus: 403,
+        executedEndpoint: sub,
+      });
+      return envelope(40302, `${TAG} atomic/write disabled (tdai.allowMemoryWrite=false)`, 403);
     }
     if (c.req.method !== "POST") {
       emitBridgeRejectTelemetry({
