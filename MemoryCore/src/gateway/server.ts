@@ -2405,7 +2405,7 @@ export class TdaiGateway {
    */
   private buildSkillWireOverrides(): Pick<
     WireConversationAddDeps,
-    "thresholds" | "compressOptions" | "oversizeOptions"
+    "thresholds" | "compressOptions" | "oversizeOptions" | "defaultExtractionHint"
   > {
     const cfg = this.core.getResolvedSkillConfig();
     if (!cfg) return {};
@@ -2425,6 +2425,7 @@ export class TdaiGateway {
         headKeepBytes: cfg.extraction.headKeepBytes,
         tailKeepBytes: cfg.extraction.tailKeepBytes,
       },
+      defaultExtractionHint: cfg.extraction.defaultExtractionHint,
     };
   }
 

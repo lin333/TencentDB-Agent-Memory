@@ -37,6 +37,7 @@ import {
   conversationDeleteRequestSchema,
   conversationCountRequestSchema,
   atomicUpdateRequestSchema,
+  atomicWriteRequestSchema,
   atomicQueryRequestSchema,
   atomicSearchRequestSchema,
   atomicDeleteRequestSchema,
@@ -77,6 +78,7 @@ import {
   type CountData,
   type AtomicDetail,
   type AtomicUpdateData,
+  type AtomicWriteData,
   type AtomicQueryData,
   type AtomicSearchData,
   type AtomicSearchHit,
@@ -157,6 +159,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/conversation/delete",
   "/conversation/count",
   "/atomic/update",
+  "/atomic/write",
   "/atomic/query",
   "/atomic/search",
   "/atomic/delete",
@@ -178,15 +181,15 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
  *   - 原始 L0/L1/L2/L3 表完全不动，本函数只追加事件
  *   - team/agent/user/task 来自外部请求 IdFields（resolveIsolation 后的 ctx）
  *   - L0 不参与（不可变流水）
- *   - 5 个 mutation handler 各调一次：
- *     atomic/update + atomic/delete + scenario/write + scenario/rm + core/write
+ *   - 6 个 mutation handler 各调一次：
+ *     atomic/update + atomic/write + atomic/delete + scenario/write + scenario/rm + core/write
  */
 async function recordAudit(
   store: IMemoryStore | undefined,
   args: {
     record_id: string;
     layer: "L1" | "L2" | "L3";
-    action: "update" | "delete";
+    action: "create" | "update" | "delete";
     iso?: { teamId?: string; userId?: string; agentId?: string; sessionId?: string; taskId?: string };
     version: number;
     requestId: string;
@@ -417,6 +420,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/conversation/delete": handleConversationDelete,
   "/conversation/count": handleConversationCount,
   "/atomic/update": handleAtomicUpdate,
+  "/atomic/write": handleAtomicWrite,
   "/atomic/query": handleAtomicQuery,
   "/atomic/search": handleAtomicSearch,
   "/atomic/delete": handleAtomicDelete,
@@ -1120,6 +1124,78 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   });
 
   return successEnvelope<AtomicUpdateData>({ id, version: `v${updatedVersion}`, updated_at: now }, requestId);
+}
+
+/**
+ * POST /v3/atomic/write — 显式写入一条全新 L1 atom，绕开 conversation/add 的
+ * 自动抽取管线（round 累积 → core 决定归档时机 → LLM 抽取）。让 agent 能主动把
+ * 一条结论/事实立即落成一条可检索的记忆，而不是等自动抽取"也许"会抽出来。
+ *
+ * 建模上照抄 handleAtomicUpdate 的同步写模式（store.upsertL1 + getEmbedding +
+ * recordAudit），不复用 core/record/l1-writer.ts 的 writeMemory()——那个函数
+ * 是给自动抽取管线用的批量 dedup 机器（DedupDecision/JSONL shard），语义不匹配
+ * 单条显式写。
+ *
+ * visibility="team" 时，写入的 atom 对同 team_id 下所有 user 可见（读侧见
+ * core/store/isolation.ts:rowMatchesIsolation 与 sqlite/memory-store.ts 的
+ * queryL1Paginated），默认 "private" 与自动抽取产出的记录行为完全一致。
+ */
+async function handleAtomicWrite(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = atomicWriteRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+  const { content, type, visibility } = parsed.data;
+
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+
+  // 主动写入必须能明确归属到 team+user+agent 三元组——不像 update/delete 那样可以
+  // 从既有记录回填缺省值，这里没有"既有记录"。/v3 dispatch 已经对 team_id/
+  // agent_id/user_id 缺失做过 422，这里是防御性重复校验。
+  const iso = deps.requestIsolation;
+  if (!iso?.teamId || !iso?.userId || !iso?.agentId) {
+    return errorEnvelope(422, "atomic/write requires team_id + user_id + agent_id", requestId);
+  }
+
+  const now = new Date().toISOString();
+  const id = `atom-${randomUUID().replace(/-/g, "")}`;
+  const record: MemoryRecord = {
+    id,
+    content,
+    type,
+    priority: 50,
+    scene_name: "",
+    source_message_ids: [],
+    metadata: {},
+    timestamps: [now],
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    sessionKey: "",
+    sessionId: iso.sessionId ?? "",
+    taskId: iso.taskId,
+    teamId: iso.teamId,
+    userId: iso.userId,
+    agentId: iso.agentId,
+    visibility: visibility ?? "private",
+  };
+
+  const embedding = deps.getEmbedding();
+  let emb: Float32Array | undefined;
+  if (embedding) { try { emb = await embedding.embed(content); } catch (e) { console.warn(`[v2-router] L1 embedding failed:`, e); } }
+
+  await store.upsertL1(record, emb);
+
+  await recordAudit(store, {
+    record_id: id,
+    layer: "L1",
+    action: "create",
+    iso,
+    version: 1,
+    requestId,
+    logger: deps.logger,
+  });
+
+  return successEnvelope<AtomicWriteData>({ id, version: "v1", created_at: now }, requestId);
 }
 
 async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {

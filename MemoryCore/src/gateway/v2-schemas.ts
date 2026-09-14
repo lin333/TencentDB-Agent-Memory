@@ -336,6 +336,34 @@ export const atomicDeleteRequestSchema = z.object({
 );
 export type AtomicDeleteRequest = z.infer<typeof atomicDeleteRequestSchema>;
 
+/**
+ * atomicWrite：显式写入一条 L1 atom（不经过 conversation/add 的自动抽取管线）。
+ * `visibility="team"` 时该 atom 对同 team_id 下所有 user 可见（见
+ * core/store/isolation.ts:rowMatchesIsolation），默认 "private" 与原有行为一致。
+ * 不接生成管线（generated/schemas.ts 是 Kubb 产出，不在其中手改），故手写在此。
+ */
+export const atomicWriteRequestSchema = z.object({
+  content: z.string().min(1).max(8192),
+  type: z.enum([
+    "persona",
+    "episodic",
+    "instruction",
+    "work_fact",
+    "work_task",
+    "work_method",
+    "work_artifact",
+  ]),
+  visibility: z.enum(["team", "private"]).optional(),
+});
+export type AtomicWriteRequest = z.infer<typeof atomicWriteRequestSchema>;
+
+export const atomicWriteDataSchema = z.object({
+  id: z.string(),
+  version: z.string(),
+  created_at: z.string(),
+});
+export type AtomicWriteData = z.infer<typeof atomicWriteDataSchema>;
+
 // ============================
 // Tenancy isolation extension
 // ============================

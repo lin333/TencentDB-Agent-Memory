@@ -115,6 +115,10 @@ skill:
     # toolCallThreshold: 10       # 预留字段，暂无消费者
     # 说明：headChars / tailChars 在 service 模式的 per-instance extractor 路径不透传，
     #      因此不在 yaml 暴露；如需调整请改 skill-extractor.ts 默认或补 server.ts 透传。
+    # defaultExtractionHint: |    # ✅ 生效：conversation/add 自动归档路径的默认抽取提示语，
+    #   请使用中文提炼 skill。name 保持英文 slug；description 必须用中文写清楚触发场景
+    #   （以"中文触发场景："开头）；body 内容用中文。
+    #   全局配置，所有 team/agent 共用；force-archive 手动归档路径用客户端自传 reason，不受此项影响。
     queue:
       backend: "local"            # standalone 用进程内队列；service 改 "redis"
       keyPrefix: "tdai"           # Redis key 前缀（redis 后端）

@@ -53,6 +53,12 @@ export interface SkillConfigInput {
      * (按 updated_at DESC 分页) 共用的上限。默认 20; <=0 或非整数 warn 落回 20。
      */
     prefixSkillsLimit?: number;
+    /**
+     * conversation/add 自动归档路径的默认抽取提示语（服务端配置，非客户端可控）。
+     * 拼到抽取 LLM prompt 最前面，用于统一约束输出语言/风格（如强制中文 description）。
+     * force-archive 手动归档路径有自己的客户端传入 reason，不受此项影响。
+     */
+    defaultExtractionHint?: string;
   };
 
   /**
@@ -140,6 +146,8 @@ export interface ResolvedSkillConfig {
     headChars: number;
     /** Extractor transcript 截断: 保留尾字符。= archiveBytes。 */
     tailChars: number;
+    /** conversation/add 自动归档路径的默认抽取提示语，见 SkillConfigInput.extraction.defaultExtractionHint。 */
+    defaultExtractionHint?: string;
   };
 
   /** 单条大 tool 消息头尾压缩，参数与 CompressOptions 对齐。 */

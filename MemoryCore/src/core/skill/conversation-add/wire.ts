@@ -60,6 +60,9 @@ export interface WireConversationAddDeps {
 
   /** COS 子路径（默认 "skill_buffer"） */
   bufferSubPath?: string;
+
+  /** conversation/add 自动归档的默认抽取提示语（对应 SkillConfig.extraction.defaultExtractionHint）。 */
+  defaultExtractionHint?: string;
 }
 
 /**
@@ -108,6 +111,7 @@ export function wireConversationAddHandler(
     thresholds: deps.thresholds,
     compressOptions: deps.compressOptions,
     oversizeOptions: deps.oversizeOptions,
+    defaultExtractionHint: deps.defaultExtractionHint,
   });
 
   const sink = new SkillCoreSink({

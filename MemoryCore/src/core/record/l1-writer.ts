@@ -95,6 +95,16 @@ export interface MemoryRecord {
   teamId?: string;
   userId?: string;
   agentId?: string;
+  /**
+   * Read-time visibility scope, in addition to the teamId/userId/agentId tuple above.
+   * - `"private"` (default, including legacy rows with no column value): only visible
+   *   to the writing `userId` — current/original behavior, unchanged.
+   * - `"team"`: visible to any user under the same `teamId` (used by the explicit
+   *   `POST /v3/atomic/write` route so an agent can proactively write a team-shared
+   *   memory instead of only relying on automatic per-user L0→L1 extraction).
+   * Only enforced for L1 (`l1_records`); L0 conversation rows are unaffected.
+   */
+  visibility?: "team" | "private";
 }
 
 /**

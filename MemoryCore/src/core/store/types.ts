@@ -131,6 +131,7 @@ export interface L1RecordRow {
   created_time: string;
   updated_time: string;
   metadata_json: string;
+  visibility?: string | null;
 }
 
 // ============================
@@ -556,7 +557,7 @@ export interface AuditEntry {
    */
   record_id: string;
   layer: "L1" | "L2" | "L3";
-  action: "update" | "delete";
+  action: "create" | "update" | "delete";
   /** 外部请求 IdFields 副本，来源是调用方传入的 body / header（resolveIsolation 后）。 */
   team_id?: string;
   agent_id?: string;
@@ -574,7 +575,7 @@ export interface AuditEntry {
 export interface AuditQueryFilter {
   record_id?: string;
   layer?: "L1" | "L2" | "L3";
-  action?: "update" | "delete";
+  action?: "create" | "update" | "delete";
   team_id?: string;
   agent_id?: string;
   user_id?: string;

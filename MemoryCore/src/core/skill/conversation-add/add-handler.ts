@@ -111,6 +111,8 @@ export interface SkillConversationAddHandlerOptions {
   compressOptions?: Partial<CompressOptions>;
   oversizeOptions?: Partial<OversizeOptions>;
   now?: () => number;
+  /** conversation/add 自动归档触发时附带的默认抽取提示语，见 SkillConfig.extraction.defaultExtractionHint。 */
+  defaultExtractionHint?: string;
 }
 
 export class HandlerValidationError extends Error {
@@ -127,6 +129,7 @@ export class SkillConversationAddHandler {
   private readonly compressOptions: CompressOptions;
   private readonly oversizeOptions: OversizeOptions;
   private readonly now: () => number;
+  private readonly defaultExtractionHint?: string;
 
   constructor(opts: SkillConversationAddHandlerOptions) {
     this.buffer = opts.buffer;
@@ -135,6 +138,7 @@ export class SkillConversationAddHandler {
     this.compressOptions = { ...DEFAULT_COMPRESS_OPTIONS, ...opts.compressOptions };
     this.oversizeOptions = { ...DEFAULT_OVERSIZE_OPTIONS, ...opts.oversizeOptions };
     this.now = opts.now ?? (() => Date.now());
+    this.defaultExtractionHint = opts.defaultExtractionHint;
   }
 
   async handle(input: AddConversationInput): Promise<AddConversationResult> {
@@ -228,6 +232,9 @@ export class SkillConversationAddHandler {
         taskRefId: input.task_id,
         // 透传 req_id 给 trigger 内部分段事件（write_archive / mutex_* / enqueue_agent）
         perfRequestId: input.perfRequestId,
+        // 服务端配置的默认抽取提示语（如强制中文 description）；force-archive 路径
+        // 用的是客户端传入的 reason，这里走的是服务端统一配置，见 SkillConfig.extraction.defaultExtractionHint。
+        reason: this.defaultExtractionHint,
       });
       obsLogger.info("skill.add_handler.trigger_archive", {
         req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,

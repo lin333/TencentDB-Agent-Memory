@@ -255,6 +255,7 @@ export function resolveSkillConfig(
       tailKeepBytes: archiveBytes,
       headChars: archiveBytes,
       tailChars: archiveBytes,
+      defaultExtractionHint: input.extraction?.defaultExtractionHint,
     },
     compress: {
       toolContentThresholdBytes: input.compress?.toolContentThresholdBytes ?? 2048,

@@ -253,6 +253,10 @@ export class VectorStore implements IMemoryStore {
   private stmtInsertVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtDeleteMeta!: StatementSync;
   private stmtGetMeta!: StatementSync;
+  // FTS5 virtual tables (l1_fts) can't ALTER-migrate a new column the way plain
+  // tables can, so `visibility` isn't duplicated there; searchL1Fts does a cheap
+  // secondary lookup against l1_records via this statement instead.
+  private stmtGetL1Visibility!: StatementSync;
   private stmtSearchVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtQueryBySessionId!: StatementSync;
   private stmtQueryBySessionIdSince!: StatementSync;
@@ -499,7 +503,8 @@ export class VectorStore implements IMemoryStore {
         timestamp_end TEXT DEFAULT '',
         created_time TEXT DEFAULT '',
         updated_time TEXT DEFAULT '',
-        metadata_json TEXT DEFAULT '{}'
+        metadata_json TEXT DEFAULT '{}',
+        visibility TEXT DEFAULT 'private'
       )
     `);
 
@@ -510,6 +515,9 @@ export class VectorStore implements IMemoryStore {
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'"); } catch { /* exists */ }
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN task_id TEXT DEFAULT ''"); } catch { /* exists */ }
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN version INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+    // visibility: NULL on legacy rows behaves identically to 'private' everywhere it's
+    // read (rowMatchesIsolation / queryL1Paginated both only special-case === 'team').
+    try { this.db.exec("ALTER TABLE l1_records ADD COLUMN visibility TEXT DEFAULT 'private'"); } catch { /* exists */ }
     this.db.prepare("UPDATE l1_records SET team_id = ? WHERE team_id = '' OR team_id IS NULL").run(DEFAULT_ISOLATION_ID);
     this.db.prepare("UPDATE l1_records SET user_id = ? WHERE user_id = '' OR user_id IS NULL").run(DEFAULT_ISOLATION_ID);
     this.db.prepare("UPDATE l1_records SET agent_id = ? WHERE agent_id = '' OR agent_id IS NULL").run(DEFAULT_ISOLATION_ID);
@@ -556,8 +564,8 @@ export class VectorStore implements IMemoryStore {
         record_id, content, type, priority, scene_name, session_key, session_id,
         team_id, task_id, version, timestamp_str, timestamp_start, timestamp_end,
         created_time, updated_time, metadata_json,
-        user_id, agent_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        user_id, agent_id, visibility
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -572,7 +580,8 @@ export class VectorStore implements IMemoryStore {
         updated_time=excluded.updated_time,
         metadata_json=excluded.metadata_json,
         user_id=excluded.user_id,
-        agent_id=excluded.agent_id
+        agent_id=excluded.agent_id,
+        visibility=excluded.visibility
     `);
 
     if (this.dimensions > 0) {
@@ -583,9 +592,13 @@ export class VectorStore implements IMemoryStore {
 
     this.stmtGetMeta = this.db.prepare(`
       SELECT content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id,
-             version, timestamp_str, timestamp_start, timestamp_end, metadata_json
+             version, timestamp_str, timestamp_start, timestamp_end, metadata_json, visibility
       FROM l1_records WHERE record_id = ?
     `);
+
+    this.stmtGetL1Visibility = this.db.prepare(
+      "SELECT visibility FROM l1_records WHERE record_id = ?",
+    );
 
     if (this.dimensions > 0) {
       this.stmtSearchVec = this.db.prepare(`
@@ -1256,6 +1269,7 @@ export class VectorStore implements IMemoryStore {
           JSON.stringify(record.metadata),
           (record as MemoryRecord & { userId?: string }).userId || DEFAULT_ISOLATION_ID,
           (record as MemoryRecord & { agentId?: string }).agentId || DEFAULT_ISOLATION_ID,
+          record.visibility || "private",
         );
 
         if (!skipVec) {
@@ -1385,6 +1399,7 @@ export class VectorStore implements IMemoryStore {
               timestamp_start: string;
               timestamp_end: string;
               metadata_json: string;
+              visibility: string | null;
             }
           | undefined;
 
@@ -2494,8 +2509,17 @@ export class VectorStore implements IMemoryStore {
         params.push(filter.teamId);
       }
       if (filter.userId !== undefined) {
-        conditions.push("user_id = ?");
-        params.push(filter.userId);
+        // Team-visible atoms (written via POST /v3/atomic/write with visibility="team")
+        // are additionally readable by any user under the same team, not just the
+        // writer. Legacy/default rows have visibility='private' (or NULL), so the
+        // second OR branch never fires for them — exact user_id match is unchanged.
+        if (filter.teamId !== undefined) {
+          conditions.push("(user_id = ? OR (visibility = 'team' AND team_id = ?))");
+          params.push(filter.userId, filter.teamId);
+        } else {
+          conditions.push("user_id = ?");
+          params.push(filter.userId);
+        }
       }
       if (filter.agentId !== undefined) {
         conditions.push("agent_id = ?");
@@ -2523,7 +2547,7 @@ export class VectorStore implements IMemoryStore {
 
       // Fetch page — must include user_id / agent_id so callers can enforce
       // isolation in downstream filters / Coordinator candidate pool.
-      const dataSql = `SELECT record_id, content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start, timestamp_end, created_time, updated_time, metadata_json FROM l1_records ${where} ORDER BY updated_time DESC LIMIT ? OFFSET ?`;
+      const dataSql = `SELECT record_id, content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start, timestamp_end, created_time, updated_time, metadata_json, visibility FROM l1_records ${where} ORDER BY updated_time DESC LIMIT ? OFFSET ?`;
       const rows = this.db.prepare(dataSql).all(...params, filter.limit, filter.offset) as unknown as L1RecordRow[];
 
       return { rows, total };
@@ -3028,8 +3052,16 @@ export class VectorStore implements IMemoryStore {
         rank: number;
       }>;
 
+      // l1_fts (FTS5 virtual table) doesn't carry `visibility` — FTS5 tables can't be
+      // ALTER-migrated like l1_records, so we look it up per-hit against l1_records
+      // instead of duplicating the column into the FTS schema.
       return rows
-        .filter((r) => rowMatchesIsolation(r, filter))
+        .filter((r) => {
+          const visRow = this.stmtGetL1Visibility.get(r.record_id) as
+            | { visibility: string | null }
+            | undefined;
+          return rowMatchesIsolation({ ...r, visibility: visRow?.visibility }, filter);
+        })
         .slice(0, limit)
         .map((r) => ({
           record_id: r.record_id,

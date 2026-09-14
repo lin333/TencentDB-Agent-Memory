@@ -157,12 +157,24 @@ export function buildIsolationWhere(
  * store cannot push the filter down (e.g. older TCVDB collection).
  */
 export function rowMatchesIsolation(
-  row: { team_id?: string; user_id?: string; agent_id?: string; session_id?: string; task_id?: string; session_key?: string },
+  row: {
+    team_id?: string;
+    user_id?: string;
+    agent_id?: string;
+    session_id?: string;
+    task_id?: string;
+    session_key?: string;
+    /** L1-only. 'team' rows are additionally visible to any user in the same team_id. */
+    visibility?: string | null;
+  },
   filter: IsolationFilter | undefined,
 ): boolean {
   if (!filter) return true;
   if (filter.teamId !== undefined && row.team_id !== filter.teamId) return false;
-  if (filter.userId !== undefined && row.user_id !== filter.userId) return false;
+  // Team-visible atoms bypass the exact-user match as long as team_id already
+  // matched above; legacy/private rows (visibility unset) keep the old exact match.
+  const teamVisible = row.visibility === "team" && filter.teamId !== undefined;
+  if (!teamVisible && filter.userId !== undefined && row.user_id !== filter.userId) return false;
   if (filter.agentId !== undefined && row.agent_id !== filter.agentId) return false;
   if (filter.sessionId !== undefined && row.session_id !== filter.sessionId) return false;
   if (filter.taskId !== undefined && row.task_id !== filter.taskId) return false;
