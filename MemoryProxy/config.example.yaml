@@ -603,6 +603,9 @@ tdai:
   endpoint: "http://127.0.0.1:8420"   # 内核 gateway 地址（通常与 skill.endpoint 相同）
   apiKey: "local"           # Authorization: Bearer 值（通常与 skill.serviceToken 相同）
   serviceId: "default"      # x-tdai-service-id header 值
+  # allowMemoryWrite: false  # 可选（默认 false）。true 时注入 tdai_memory_write 工具，
+  #                           允许 agent 主动写入团队共享记忆（L1 atom）。
+  #                           仅对受信任的 agent 开启，错误写入会污染共享记忆。
   memory:
     enabled: true           # Memory 子模块总开关
     inject: true            # 上下文注入总开关（false = 所有 L0~L3 注入全关）

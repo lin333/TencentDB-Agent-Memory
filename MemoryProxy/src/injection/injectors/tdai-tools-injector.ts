@@ -50,6 +50,8 @@ export interface TdaiMemoryToolsInjectorConfig {
    * E.g. `http://127.0.0.1:8096`. Trailing slash trimmed.
    */
   proxyBaseUrl: string;
+  /** 是否注入 `tdai_memory_write` 工具。默认 false。对应 config.tdai.allowMemoryWrite。 */
+  allowMemoryWrite?: boolean;
 }
 
 /** 渲染整段 `<tdai_memory_tools>` 文本，纯函数便于测试。 */
@@ -57,6 +59,7 @@ export function renderTdaiMemoryToolsBlock(
   proxyBaseUrl: string,
   sessionId?: string,
   spaceId?: string,
+  allowMemoryWrite?: boolean,
 ): string {
   const base = proxyBaseUrl.replace(/\/$/, "");
   const bridge = `${base}/memory-bridge/v3`;
@@ -118,9 +121,24 @@ export function renderTdaiMemoryToolsBlock(
     `    body: {"path": "<scene path>", "agent_id": "?来自 <agent agent_id=...>，读取 imported 记忆时传"}`,
     "    use:  按 path 读取 L2 场景文件全文。path 必须先从 `<l2_scene_index>` 或 tdai_scenario_ls 获取，不要凭空构造；读取 imported_from 分段的 path 时带上该分段 agent_id。",
     "  </tool>",
+    ...(allowMemoryWrite ? [
+      "",
+      "  <tool name=\"tdai_memory_write\">",
+      `    curl: ${bridge}/atomic/write`,
+      `    body: {"content": "<text>", "type": "instruction", "visibility": "team"}`,
+      "    use:  主动写入团队共享记忆（L1 atom）。用于把本轮推导出的结论/规则固化为团队可见记忆。" +
+        "type 可选 episodic（事件）/persona（用户画像）/instruction（规则/结论，默认）。" +
+        "visibility=team 让同 team 下所有 agent 可检索到；省略则仅自己可见。" +
+        "**仅在有明确、高质量、可复用的结论时写入**，不要写中间步骤或临时推断。" +
+        "不支持 agent_id 参数——只能写自己身份下的记忆，不能代替 imported agent 写入。",
+      "    returns: {code, data: {id, version, created_at}}",
+      "  </tool>",
+    ] : []),
     "",
     "## 调用约束",
-    "- 这些是只读工具；要修改 L1/L2/L3 必须用主链路（agent_id 自动归属）。",
+    allowMemoryWrite
+      ? "- 除 tdai_memory_write 外均为只读工具；tdai_memory_write 之外要修改 L1/L2/L3 必须用主链路（agent_id 自动归属）。"
+      : "- 这些是只读工具；要修改 L1/L2/L3 必须用主链路（agent_id 自动归属）。",
     "- 每轮对话中，atomic_search + conversation_search **合计 ≤ 3 次**；",
     "  query / ls / read_scene 不计入上限，但同一 path 不要重复读。",
     "- 失败重试：HTTP 5xx 可一次性 retry；HTTP 4xx 不要重试。",
@@ -173,7 +191,7 @@ export class TdaiMemoryToolsInjector implements InjectionHook {
   private renderBlocks(sessionId: string, spaceId?: string): ContextBlock[] {
     return [{
       type: "text",
-      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId),
+      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId, this.cfg.allowMemoryWrite),
       metadata: {
         source: this.id,
         sessionId,

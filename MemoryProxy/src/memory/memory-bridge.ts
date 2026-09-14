@@ -15,8 +15,10 @@
  *   6. 透传 status 和 JSON body
  *
  * 安全：
- *   - allowlist 限定只有 search / read 类只读 subpath；mutation 走主链路
- *   - 不接受 atomic/update / scenario/write / core/write 等写操作
+ *   - allowlist 限定只有 search / read 类只读 subpath + 一个受控写例外 atomic/write；
+ *     其余 mutation（atomic/update / scenario/write / core/write 等）一律走主链路
+ *   - atomic/write 仅在 config.tdai.allowMemoryWrite 为 true 时才会被 LLM 看到
+ *     （TdaiToolsInjector 不渲染该工具块），且受 Core 侧 team/user 隔离 + 审计兜底
  *   - v3 strict isolation: 强制注入 session_id，满足 L0/L1 必填要求
  */
 
@@ -33,19 +35,23 @@ import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFrom
 const TAG = "[memory-bridge]";
 
 /**
- * 允许通过 bridge 转发的 tdai 子路径（**只读**，LLM 通过 Bash 工具按需调用）。
+ * 允许通过 bridge 转发的 tdai 子路径（默认**只读**，`atomic/write` 是唯一受控写例外）。
  *
  * 设计取舍：
  *   - L0/L1 不再每轮自动召回，改为静态工具按需检索（cache 友好），因此放行
  *     atomic/* 与 conversation/* 的 search/query。
  *   - L2：system 给索引 `<l2_scene_index>`，正文按需读 → 放行 scenario/ls + scenario/read。
  *   - L3（persona）：直接注入 system，无需工具 → **不放行** core/read。
+ *   - atomic/write：主动写团队/私有 L1 记忆，仅 `config.tdai.allowMemoryWrite=true`
+ *     时才会被注入进 system prompt（见 tdai-tools-injector.ts），且工具描述里不提供
+ *     agent_id 参数，写入天然限定为"自己"这个 agent 身份（不能借用 imported agent 身份写）。
  *
- * 写操作（write / rm / add / update / delete）一律不在 allowlist 里；写入走主链路。
+ * 其余写操作（rm / add / update / delete 等）一律不在 allowlist 里；写入走主链路。
  */
 const ALLOWED_SUBPATHS = new Set<string>([
   "atomic/search",        // L1 原子记忆 hybrid search
   "atomic/query",         // L1 按 type/时间/分页
+  "atomic/write",         // L1 主动写入团队/私有记忆（受 allowMemoryWrite 开关控制是否暴露给 LLM）
   "conversation/search",  // L0 对话 hybrid search
   "conversation/query",   // L0 按 session 取历史
   "scenario/ls",          // L2 场景列表（path 索引）

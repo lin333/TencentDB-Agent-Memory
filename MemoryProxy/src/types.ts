@@ -301,6 +301,11 @@ export interface TdaiConfig {
   endpoint: string;
   apiKey: string;
   serviceId: string;
+  /**
+   * 是否注入 `tdai_memory_write` 工具，允许 agent 主动写团队共享记忆（L1 atom）。
+   * 默认 false：仅落地能力，不对任何 agent 开放，避免误写污染共享记忆。
+   */
+  allowMemoryWrite?: boolean;
   memory: {
     enabled: boolean;
     /** Master switch for all TDAI memory prompt injection. */
