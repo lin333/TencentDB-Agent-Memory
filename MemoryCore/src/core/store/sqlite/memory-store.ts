@@ -905,17 +905,11 @@ export class VectorStore implements IMemoryStore {
         this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_isolation ON memory_audit(team_id, agent_id, user_id, task_id)");
         this.db.exec("COMMIT");
         this.logger?.info("[sqlite] memory_audit migrated: action CHECK now allows 'create'");
-        console.log("[sqlite] memory_audit migrated: action CHECK now allows 'create'");
-      } else {
-        console.log(`[sqlite] memory_audit migration skipped: existingSql.sql=${JSON.stringify(existingSql?.sql)}`);
       }
     } catch (err) {
       try { this.db.exec("ROLLBACK"); } catch { /* no transaction open */ }
       this.logger?.warn(
         `[sqlite] memory_audit 'create' action migration failed (non-fatal, audit logging degrades): ${err instanceof Error ? err.message : String(err)}`,
-      );
-      console.error(
-        `[sqlite] memory_audit 'create' action migration FAILED: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
       );
     }
 
